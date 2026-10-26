@@ -1,0 +1,37 @@
+[package]
+name = "yose"
+version = "0.1.0"
+edition = "2021"
+authors = ["yoSE Architecture Team"]
+description = "yoSE (yo Search Engine) - Navigateur Web hybride ultra-minimaliste et moteur de recherche local FTS5"
+
+[dependencies]
+# Fenêtrage natif cross-platform (macOS Cocoa, Linux X11/Wayland, Windows Win32)
+tao = { version = "0.30", features = ["rwh_06"] }
+
+# WebView native de l'OS (WKWebView, WebKitGTK, WebView2) sans Electron/CEF
+wry = { version = "0.47", features = ["os-webview", "protocol"] }
+
+# Moteur SQLite embarqué avec support complet de FTS5 et mode WAL
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Sérialisation / Désérialisation JSON ultra-rapide pour le bus IPC
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Décodage de l'icône système (assets/logo_color.png -> RGBA8)
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+# Encodage d'URL pour le fallback vers le moteur externe (DuckDuckGo)
+urlencoding = "2.1"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"
+
+[profile.release]
+opt-level = "z"     # Optimisation pour la taille binaire et le cache CPU
+lto = true          # Link-Time Optimization globale
+codegen-units = 1   # Optimisation maximale inter-modules
+panic = "abort"     # Réduction de l'empreinte mémoire (pas de stack unwinding)
+strip = true        # Suppression des symboles de debug
+

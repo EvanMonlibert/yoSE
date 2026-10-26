@@ -1,0 +1,165 @@
+name: Build & Release (Windows .exe & macOS .dmg/.app)
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Version de la release (ex: v0.1.0)'
+        required: true
+        default: 'v0.1.0'
+
+permissions:
+  contents: write
+
+jobs:
+  # ============================================================================
+  # 1. BUILD WINDOWS (.exe autonome x64)
+  # ============================================================================
+  build-windows:
+    name: Build Windows (.exe)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build yoSE Release (.exe)
+        run: cargo build --release
+
+      - name: Prepare Windows Artifact
+        shell: bash
+        run: cp target/release/yose.exe yoSE-windows-x64.exe
+
+      - name: Upload Windows .exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-exe
+          path: yoSE-windows-x64.exe
+
+  # ============================================================================
+  # 2. BUILD MACOS (.app & .dmg Universal : Apple Silicon + Intel)
+  # ============================================================================
+  build-macos:
+    name: Build macOS (.app & .dmg)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust Universal Targets (Apple Silicon + Intel)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build Universal Binary (arm64 + x86_64)
+        run: |
+          cargo build --release --target aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+
+      - name: Package yoSE.app & yoSE-macos.dmg
+        run: |
+          mkdir -p "yoSE.app/Contents/MacOS"
+          mkdir -p "yoSE.app/Contents/Resources"
+
+          # Fusion des binaires arm64 et x86_64 en binaire universel macOS
+          lipo -create \
+            target/aarch64-apple-darwin/release/yose \
+            target/x86_64-apple-darwin/release/yose \
+            -output "yoSE.app/Contents/MacOS/yose"
+          chmod +x "yoSE.app/Contents/MacOS/yose"
+
+          # Conversion de assets/logo_color.png en icône macOS native AppIcon.icns
+          mkdir -p AppIcon.iconset
+          sips -z 16 16     assets/logo_color.png --out AppIcon.iconset/icon_16x16.png
+          sips -z 32 32     assets/logo_color.png --out AppIcon.iconset/icon_16x16@2x.png
+          sips -z 32 32     assets/logo_color.png --out AppIcon.iconset/icon_32x32.png
+          sips -z 64 64     assets/logo_color.png --out AppIcon.iconset/icon_32x32@2x.png
+          sips -z 128 128   assets/logo_color.png --out AppIcon.iconset/icon_128x128.png
+          sips -z 256 256   assets/logo_color.png --out AppIcon.iconset/icon_128x128@2x.png
+          sips -z 256 256   assets/logo_color.png --out AppIcon.iconset/icon_256x256.png
+          sips -z 512 512   assets/logo_color.png --out AppIcon.iconset/icon_256x256@2x.png
+          sips -z 512 512   assets/logo_color.png --out AppIcon.iconset/icon_512x512.png
+          sips -z 1024 1024 assets/logo_color.png --out AppIcon.iconset/icon_512x512@2x.png
+          iconutil -c icns AppIcon.iconset -o "yoSE.app/Contents/Resources/AppIcon.icns"
+
+          # Génération du Info.plist
+          cat > "yoSE.app/Contents/Info.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleExecutable</key>
+              <string>yose</string>
+              <key>CFBundleIconFile</key>
+              <string>AppIcon</string>
+              <key>CFBundleIdentifier</key>
+              <string>com.yose.browser</string>
+              <key>CFBundleName</key>
+              <string>yoSE</string>
+              <key>CFBundleDisplayName</key>
+              <string>yoSE</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>CFBundleShortVersionString</key>
+              <string>0.1.0</string>
+              <key>CFBundleVersion</key>
+              <string>1</string>
+              <key>LSMinimumSystemVersion</key>
+              <string>11.0</string>
+              <key>NSHighResolutionCapable</key>
+              <true/>
+          </dict>
+          </plist>
+          EOF
+
+          # Signature ad-hoc pour exécution locale fluide sur macOS
+          codesign --force --deep --sign - "yoSE.app"
+
+          # Archive .app.zip et image disque .dmg
+          ditto -c -k --sequesterRsrc --keepParent "yoSE.app" "yoSE-macos-universal.app.zip"
+          hdiutil create -volname "yoSE" -srcfolder "yoSE.app" -ov -format UDZO "yoSE-macos-universal.dmg"
+
+      - name: Upload macOS Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-bundles
+          path: |
+            yoSE-macos-universal.dmg
+            yoSE-macos-universal.app.zip
+
+  # ============================================================================
+  # 3. PUBLICATION AUTOMATIQUE DE LA GITHUB RELEASE
+  # ============================================================================
+  publish-release:
+    name: Create GitHub Release
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Publish Release on GitHub
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name != 'main' && github.ref_name != 'master' && github.ref_name || inputs.tag_name || 'v0.1.0' }}
+          name: "yoSE ${{ github.ref_name != 'main' && github.ref_name != 'master' && github.ref_name || inputs.tag_name || 'v0.1.0' }}"
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            artifacts/windows-exe/yoSE-windows-x64.exe
+            artifacts/macos-bundles/yoSE-macos-universal.dmg
+            artifacts/macos-bundles/yoSE-macos-universal.app.zip
